@@ -1381,7 +1381,7 @@ out:
 	return ret;
 }
 
-static double
+double
 vg_prefix_get_difficulty(int addrtype, const char *pattern)
 {
 	BN_CTX *bnctx;
