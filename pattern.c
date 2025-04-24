@@ -28,6 +28,7 @@
 #include <openssl/bn.h>
 #include <openssl/ec.h>
 #include <openssl/obj_mac.h>
+#include <openssl/rand.h>
 
 #include <pcre.h>
 
@@ -35,6 +36,7 @@
 #include "util.h"
 #include "avl.h"
 
+#define OPENSSL_SUPPRESS_DEPRECATED
 
 /*
  * Common code for execution helper
@@ -145,64 +147,52 @@ vg_exec_context_downgrade_lock(vg_exec_context_t *vxcp)
 int
 vg_exec_context_init(vg_context_t *vcp, vg_exec_context_t *vxcp)
 {
-	pthread_mutex_lock(&vg_thread_lock);
-
 	memset(vxcp, 0, sizeof(*vxcp));
-
 	vxcp->vxc_vc = vcp;
-
-	BN_init(&vxcp->vxc_bntarg);
-	BN_init(&vxcp->vxc_bnbase);
-	BN_init(&vxcp->vxc_bntmp);
-	BN_init(&vxcp->vxc_bntmp2);
-
-	BN_set_word(&vxcp->vxc_bnbase, 58);
-
 	vxcp->vxc_bnctx = BN_CTX_new();
-	assert(vxcp->vxc_bnctx);
+	if (!vxcp->vxc_bnctx)
+		return 0;
+
+	vxcp->vxc_bntarg = BN_new();
+	vxcp->vxc_bnbase = BN_new();
+	vxcp->vxc_bntmp = BN_new();
+	vxcp->vxc_bntmp2 = BN_new();
+
+	if (!vxcp->vxc_bntarg || !vxcp->vxc_bnbase ||
+	    !vxcp->vxc_bntmp || !vxcp->vxc_bntmp2) {
+		vg_exec_context_del(vxcp);
+		return 0;
+	}
+
 	vxcp->vxc_key = vg_exec_context_new_key();
-	assert(vxcp->vxc_key);
+	if (!vxcp->vxc_key) {
+		vg_exec_context_del(vxcp);
+		return 0;
+	}
+
+	BN_set_word(vxcp->vxc_bnbase, 58);
+	vxcp->vxc_binres[0] = vcp->vc_addrtype;
+
 	EC_KEY_precompute_mult(vxcp->vxc_key, vxcp->vxc_bnctx);
-
-	vxcp->vxc_lockmode = 0;
-	vxcp->vxc_stop = 0;
-
-	vxcp->vxc_next = vcp->vc_threads;
-	vcp->vc_threads = vxcp;
-	__vg_exec_context_yield(vxcp);
-	pthread_mutex_unlock(&vg_thread_lock);
 	return 1;
 }
 
 void
 vg_exec_context_del(vg_exec_context_t *vxcp)
 {
-	vg_exec_context_t *tp, **pprev;
-
-	if (vxcp->vxc_lockmode == 2)
-		vg_exec_context_downgrade_lock(vxcp);
-
-	pthread_mutex_lock(&vg_thread_lock);
-	assert(vxcp->vxc_lockmode == 1);
-	vxcp->vxc_lockmode = 0;
-
-	for (pprev = &vxcp->vxc_vc->vc_threads, tp = *pprev;
-	     (tp != vxcp) && (tp != NULL);
-	     pprev = &tp->vxc_next, tp = *pprev);
-
-	assert(tp == vxcp);
-	*pprev = tp->vxc_next;
-
-	if (tp->vxc_stop)
-		pthread_cond_signal(&vg_thread_upcond);
-
-	BN_clear_free(&vxcp->vxc_bntarg);
-	BN_clear_free(&vxcp->vxc_bnbase);
-	BN_clear_free(&vxcp->vxc_bntmp);
-	BN_clear_free(&vxcp->vxc_bntmp2);
-	BN_CTX_free(vxcp->vxc_bnctx);
-	vxcp->vxc_bnctx = NULL;
-	pthread_mutex_unlock(&vg_thread_lock);
+	if (vxcp->vxc_bntarg)
+		BN_clear_free(vxcp->vxc_bntarg);
+	if (vxcp->vxc_bnbase)
+		BN_clear_free(vxcp->vxc_bnbase);
+	if (vxcp->vxc_bntmp)
+		BN_clear_free(vxcp->vxc_bntmp);
+	if (vxcp->vxc_bntmp2)
+		BN_clear_free(vxcp->vxc_bntmp2);
+	if (vxcp->vxc_bnctx)
+		BN_CTX_free(vxcp->vxc_bnctx);
+	if (vxcp->vxc_key)
+		EC_KEY_free(vxcp->vxc_key);
+	memset(vxcp, 0, sizeof(*vxcp));
 }
 
 void
@@ -225,12 +215,12 @@ void
 vg_exec_context_consolidate_key(vg_exec_context_t *vxcp)
 {
 	if (vxcp->vxc_delta) {
-		BN_clear(&vxcp->vxc_bntmp);
-		BN_set_word(&vxcp->vxc_bntmp, vxcp->vxc_delta);
-		BN_add(&vxcp->vxc_bntmp2,
+		BN_clear(vxcp->vxc_bntmp);
+		BN_set_word(vxcp->vxc_bntmp, vxcp->vxc_delta);
+		BN_add(vxcp->vxc_bntmp2,
 		       EC_KEY_get0_private_key(vxcp->vxc_key),
-		       &vxcp->vxc_bntmp);
-		vg_set_privkey(&vxcp->vxc_bntmp2, vxcp->vxc_key);
+		       vxcp->vxc_bntmp);
+		vg_set_privkey(vxcp->vxc_bntmp2, vxcp->vxc_key);
 		vxcp->vxc_delta = 0;
 	}
 }
@@ -238,33 +228,31 @@ vg_exec_context_consolidate_key(vg_exec_context_t *vxcp)
 void
 vg_exec_context_calc_address(vg_exec_context_t *vxcp)
 {
-	EC_POINT *pubkey;
 	const EC_GROUP *pgroup;
-	unsigned char eckey_buf[96], hash1[32], hash2[20];
-	int len;
+	EC_POINT *pubkey;
+	unsigned char hash1[32];
+	unsigned char hash2[20];
 
-	vg_exec_context_consolidate_key(vxcp);
 	pgroup = EC_KEY_get0_group(vxcp->vxc_key);
 	pubkey = EC_POINT_new(pgroup);
 	EC_POINT_copy(pubkey, EC_KEY_get0_public_key(vxcp->vxc_key));
-	if (vxcp->vxc_vc->vc_pubkey_base) {
-		EC_POINT_add(pgroup,
-			     pubkey,
-			     pubkey,
-			     vxcp->vxc_vc->vc_pubkey_base,
-			     vxcp->vxc_bnctx);
+
+	if (vxcp->vxc_delta) {
+		EC_POINT_mul(pgroup, pubkey, NULL, pubkey,
+					vxcp->vxc_bntmp, vxcp->vxc_bnctx);
 	}
-	len = EC_POINT_point2oct(pgroup,
-				 pubkey,
-				 POINT_CONVERSION_UNCOMPRESSED,
-				 eckey_buf,
-				 sizeof(eckey_buf),
-				 vxcp->vxc_bnctx);
-	SHA256(eckey_buf, len, hash1);
-	RIPEMD160(hash1, sizeof(hash1), hash2);
-	memcpy(&vxcp->vxc_binres[1],
-	       hash2, 20);
+
+	vxcp->vxc_binres[0] = vxcp->vxc_vc->vc_addrtype;
+	EC_POINT_point2oct(pgroup, pubkey,
+						POINT_CONVERSION_UNCOMPRESSED,
+						&vxcp->vxc_binres[1],
+						65,
+						vxcp->vxc_bnctx);
 	EC_POINT_free(pubkey);
+
+	SHA256(&vxcp->vxc_binres[1], 65, hash1);
+	RIPEMD160(hash1, sizeof(hash1), hash2);
+	memcpy(&vxcp->vxc_binres[1], hash2, 20);
 }
 
 enum {
@@ -819,8 +807,8 @@ get_prefix_ranges(int addrtype, const char *pfx, BIGNUM **result,
 				/* Low prefix is completely below the floor */
 				assert(check_upper);
 				check_upper = 0;
-				BN_free(bnhigh);
-				bnhigh = bnhigh2;
+				BN_free(bnhigh2);
+				bnhigh2 = bnhigh2;
 				bnhigh2 = NULL;
 				BN_free(bnlow);
 				bnlow = bnlow2;
@@ -867,36 +855,6 @@ get_prefix_ranges(int addrtype, const char *pfx, BIGNUM **result,
 	}
 	else if (BN_cmp(&bntmp2, bnlow) > 0) {
 		BN_copy(bnlow, &bntmp2);
-	}
-
-	BN_set_word(&bntmp, addrtype + 1);
-	BN_lshift(&bntmp2, &bntmp, 192);
-
-	if (check_upper) {
-		if (BN_cmp(&bntmp2, bnlow2) < 0) {
-			check_upper = 0;
-			BN_free(bnhigh2);
-			bnhigh2 = NULL;
-			BN_free(bnlow2);
-			bnlow2 = NULL;
-		}
-		else if (BN_cmp(&bntmp2, bnhigh2) < 0)
-			BN_copy(bnlow2, &bntmp2);
-	}
-
-	if (BN_cmp(&bntmp2, bnlow) < 0) {
-		if (!check_upper)
-			goto not_possible;
-		check_upper = 0;
-		BN_free(bnhigh);
-		bnhigh = bnhigh2;
-		bnhigh2 = NULL;
-		BN_free(bnlow);
-		bnlow = bnlow2;
-		bnlow2 = NULL;
-	}
-	else if (BN_cmp(&bntmp2, bnhigh) < 0) {
-		BN_copy(bnhigh, &bntmp2);
 	}
 
 	/* Address ranges are complete */
