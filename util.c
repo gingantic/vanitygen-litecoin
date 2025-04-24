@@ -655,78 +655,80 @@ out:
 
 int
 vg_protect_encode_privkey(char *out,
-			  const EC_KEY *pkey, int keytype,
-			  int parameter_group,
-			  const char *pass)
+                         const EC_KEY *pkey, int keytype,
+                         int parameter_group,
+                         const char *pass)
 {
-	unsigned char ecpriv[64];
-	unsigned char ecenc[128];
-	const BIGNUM *privkey;
-	int nbytes;
-	int restype;
+        unsigned char ecpriv[64];
+        unsigned char ecenc[128];
+        const BIGNUM *privkey;
+        int nbytes;
+        int restype;
 
-	restype = (keytype & 1) ? 79 : 32;
+        restype = (keytype & 1) ? 79 : 32;
 
-	privkey = EC_KEY_get0_private_key(pkey);
-	nbytes = BN_num_bytes(privkey);
-	if (nbytes < 32)
-		memset(ecpriv, 0, 32 - nbytes);
-	BN_bn2bin(privkey, ecpriv + 32 - nbytes);
+        privkey = EC_KEY_get0_private_key(pkey);
+        nbytes = BN_num_bytes(privkey);
+        if (nbytes < 32)
+                memset(ecpriv, 0, 32 - nbytes);
+        BN_bn2bin(privkey, ecpriv + 32 - nbytes);
 
-	nbytes = vg_protect_crypt(parameter_group,
-				  ecpriv, 32,
-				  &ecenc[1], pass, 1);
-	if (nbytes <= 0)
-		return 0;
+        nbytes = vg_protect_crypt(parameter_group,
+                                ecpriv, 32,
+                                &ecenc[1], pass, 1);
+        if (nbytes <= 0)
+                return 0;
 
-	OPENSSL_cleanse(ecpriv, sizeof(ecpriv));
+        OPENSSL_cleanse(ecpriv, sizeof(ecpriv));
 
-	ecenc[0] = restype;
-	vg_b58_encode_check(ecenc, nbytes + 1, out);
-	nbytes = strlen(out);
-	return nbytes;
+        ecenc[0] = restype;
+        vg_b58_encode_check(ecenc, nbytes + 1, (unsigned char *)out, VG_PROTKEY_MAX_B58);
+        nbytes = strlen(out);
+        return nbytes;
 }
-
 
 int
 vg_protect_decode_privkey(EC_KEY *pkey, int *keytype,
-			  const char *encoded, const char *pass)
+                         const char *encoded, const char *pass)
 {
-	unsigned char ecpriv[64];
-	unsigned char ecenc[128];
-	BIGNUM bn;
-	int restype;
-	int res;
+        unsigned char ecpriv[64];
+        unsigned char ecenc[128];
+        BIGNUM *bn = NULL;
+        int restype;
+        int res;
 
-	res = vg_b58_decode_check(encoded, strlen(encoded), ecenc, sizeof(ecenc));
+        res = vg_b58_decode_check((const unsigned char *)encoded, 
+                                strlen(encoded), ecenc, sizeof(ecenc));
 
-	if ((res < 2) || (res > sizeof(ecenc)))
-		return 0;
+        if ((res < 2) || (res > sizeof(ecenc)))
+                return 0;
 
-	switch (ecenc[0]) {
-	case 32:  restype = 128; break;
-	case 79:  restype = 239; break;
-	default:
-		return 0;
-	}
+        switch (ecenc[0]) {
+        case 32:  restype = 128; break;
+        case 79:  restype = 239; break;
+        default:
+                return 0;
+        }
 
-	if (!vg_protect_crypt(-1,
-			      ecenc + 1, res - 1,
-			      pkey ? ecpriv : NULL,
-			      pass, 0))
-		return 0;
+        if (!vg_protect_crypt(-1,
+                            ecenc + 1, res - 1,
+                            pkey ? ecpriv : NULL,
+                            pass, 0))
+                return 0;
 
-	res = 1;
-	if (pkey) {
-		BN_init(&bn);
-		BN_bin2bn(ecpriv, 32, &bn);
-		res = vg_set_privkey(&bn, pkey);
-		BN_clear_free(&bn);
-		OPENSSL_cleanse(ecpriv, sizeof(ecpriv));
-	}
+        res = 1;
+        if (pkey) {
+                bn = BN_new();
+                if (!bn)
+                        return 0;
+                BN_bin2bn(ecpriv, 32, bn);
+                res = vg_set_privkey(bn, pkey);
+                BN_free(bn);
+                OPENSSL_cleanse(ecpriv, sizeof(ecpriv));
+        }
 
-	*keytype = restype;
-	return res;
+        *keytype = restype;
+        return res;
 }
 
 /*
