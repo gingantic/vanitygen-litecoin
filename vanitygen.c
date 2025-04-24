@@ -16,6 +16,9 @@
  * along with Vanitygen.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#define _CRT_SECURE_NO_WARNINGS
+#define OPENSSL_SUPPRESS_DEPRECATED
+
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
@@ -32,8 +35,10 @@
 #include "pattern.h"
 #include "util.h"
 
-#define _CRT_SECURE_NO_WARNINGS
-#define OPENSSL_SUPPRESS_DEPRECATED
+/* Define BN_MASK2 if not already defined */
+#ifndef BN_MASK2
+#define BN_MASK2 (0xffffffffffffffffLL)
+#endif
 
 const char *version = VANITYGEN_VERSION;
 
