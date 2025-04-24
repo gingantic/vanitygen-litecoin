@@ -29,6 +29,7 @@
 #include <openssl/ec.h>
 #include <openssl/obj_mac.h>
 #include <openssl/rand.h>
+#include <openssl/ossl_typ.h>
 
 #include <pcre.h>
 
@@ -680,20 +681,19 @@ get_prefix_ranges(int addrtype, const char *pfx, BIGNUM **result,
 	int b58pow, b58ceil, b58top = 0;
 	int ret = -1;
 
-	BIGNUM bntarg, bnceil, bnfloor;
-	BIGNUM bnbase;
-	BIGNUM *bnap, *bnbp, *bntp;
+	BIGNUM *bntarg = BN_new();
+	BIGNUM *bnceil = BN_new();
+	BIGNUM *bnfloor = BN_new();
+	BIGNUM *bnbase = BN_new();
+	BIGNUM *bntmp = BN_new();
+	BIGNUM *bntmp2 = BN_new();
 	BIGNUM *bnhigh = NULL, *bnlow = NULL, *bnhigh2 = NULL, *bnlow2 = NULL;
-	BIGNUM bntmp, bntmp2;
 
-	BN_init(&bntarg);
-	BN_init(&bnceil);
-	BN_init(&bnfloor);
-	BN_init(&bnbase);
-	BN_init(&bntmp);
-	BN_init(&bntmp2);
+	if (!bntarg || !bnceil || !bnfloor || !bnbase || !bntmp || !bntmp2) {
+		goto out;
+	}
 
-	BN_set_word(&bnbase, 58);
+	BN_set_word(bnbase, 58);
 
 	p = strlen(pfx);
 
@@ -720,7 +720,7 @@ get_prefix_ranges(int addrtype, const char *pfx, BIGNUM **result,
 
 			/* First non-zero character */
 			b58top = c;
-			BN_set_word(&bntarg, c);
+			BN_set_word(bntarg, c);
 
 		} else {
 			BN_set_word(&bntmp2, c);
@@ -745,7 +745,7 @@ get_prefix_ranges(int addrtype, const char *pfx, BIGNUM **result,
 		 */
 
 		BN_copy(&bntmp, &bnceil);
-		bnap = &bntmp;
+		bntp = bnap;
 		bnbp = &bntmp2;
 		b58pow = 0;
 		while (BN_cmp(bnap, &bnbase) > 0) {
@@ -875,21 +875,16 @@ get_prefix_ranges(int addrtype, const char *pfx, BIGNUM **result,
 	}
 
 out:
-	BN_clear_free(&bntarg);
-	BN_clear_free(&bnceil);
-	BN_clear_free(&bnfloor);
-	BN_clear_free(&bnbase);
-	BN_clear_free(&bntmp);
-	BN_clear_free(&bntmp2);
-	if (bnhigh)
-		BN_free(bnhigh);
-	if (bnlow)
-		BN_free(bnlow);
-	if (bnhigh2)
-		BN_free(bnhigh2);
-	if (bnlow2)
-		BN_free(bnlow2);
-
+	if (bntarg) BN_free(bntarg);
+	if (bnceil) BN_free(bnceil);
+	if (bnfloor) BN_free(bnfloor);
+	if (bnbase) BN_free(bnbase);
+	if (bntmp) BN_free(bntmp);
+	if (bntmp2) BN_free(bntmp2);
+	if (bnhigh) BN_free(bnhigh);
+	if (bnlow) BN_free(bnlow);
+	if (bnhigh2) BN_free(bnhigh2);
+	if (bnlow2) BN_free(bnlow2);
 	return ret;
 }
 
@@ -1206,25 +1201,28 @@ vg_prefix_context_free(vg_context_t *vcp)
 
 static void
 vg_prefix_context_next_difficulty(vg_prefix_context_t *vcpp,
-				  BIGNUM *bntmp, BIGNUM *bntmp2, BN_CTX *bnctx)
+				  BIGNUM *bnmin, BIGNUM *bntmp,
+				  BN_CTX *bnctx)
 {
-	char *dbuf;
+	vg_prefix_t *vp;
+	int cmp;
 
-	BN_clear(bntmp);
-	BN_set_bit(bntmp, 192);
-	BN_div(bntmp2, NULL, bntmp, &vcpp->vcp_difficulty, bnctx);
-
-	dbuf = BN_bn2dec(bntmp2);
-	if (vcpp->base.vc_verbose > 0) {
-		if (vcpp->base.vc_npatterns > 1)
-			fprintf(stderr,
-				"Next match difficulty: %s (%ld prefixes)\n",
-				dbuf, vcpp->base.vc_npatterns);
-		else
-			fprintf(stderr, "Difficulty: %s\n", dbuf);
+	/*
+	 * Find the next most difficult pattern
+	 */
+	vp = vg_prefix_first(&vcpp->vcp_avlroot);
+	if (vp) {
+		vg_prefix_range_sum(vp, bnmin, bntmp);
+		vp = vg_prefix_next(vp);
+		while (vp) {
+			vg_prefix_range_sum(vp, bntmp, bntmp);
+			cmp = BN_cmp(bnmin, bntmp);
+			if (cmp < 0)
+				BN_copy(bnmin, bntmp);
+			vp = vg_prefix_next(vp);
+		}
+		BN_copy(&vcpp->vcp_difficulty, bnmin);
 	}
-	vcpp->base.vc_chance = atof(dbuf);
-	OPENSSL_free(dbuf);
 }
 
 static int
@@ -1433,10 +1431,10 @@ vg_prefix_test(vg_exec_context_t *vxcp)
 	 * check code.
 	 */
 
-	BN_bin2bn(vxcp->vxc_binres, 25, &vxcp->vxc_bntarg);
+	BN_bin2bn(vxcp->vxc_binres, 25, vxcp->vxc_bntarg);
 
 research:
-	vp = vg_prefix_avl_search(&vcpp->vcp_avlroot, &vxcp->vxc_bntarg);
+	vp = vg_prefix_avl_search(&vcpp->vcp_avlroot, vxcp->vxc_bntarg);
 	if (vp) {
 		if (vg_exec_context_upgrade_lock(vxcp))
 			goto research;
@@ -1454,20 +1452,20 @@ research:
 		if (vcpp->base.vc_remove_on_match) {
 			/* Subtract the range from the difficulty */
 			vg_prefix_range_sum(vp,
-					    &vxcp->vxc_bntarg,
-					    &vxcp->vxc_bntmp);
-			BN_sub(&vxcp->vxc_bntmp,
-			       &vcpp->vcp_difficulty,
-			       &vxcp->vxc_bntarg);
-			BN_copy(&vcpp->vcp_difficulty, &vxcp->vxc_bntmp);
+					    vxcp->vxc_bntarg,
+					    vxcp->vxc_bntmp);
+			BN_sub(vxcp->vxc_bntmp,
+				   &vcpp->vcp_difficulty,
+				   vxcp->vxc_bntarg);
+			BN_copy(&vcpp->vcp_difficulty, vxcp->vxc_bntmp);
 
 			vg_prefix_delete(&vcpp->vcp_avlroot,vp);
 			vcpp->base.vc_npatterns--;
 
 			if (!avl_root_empty(&vcpp->vcp_avlroot))
 				vg_prefix_context_next_difficulty(
-					vcpp, &vxcp->vxc_bntmp,
-					&vxcp->vxc_bntmp2,
+					vcpp, vxcp->vxc_bntmp,
+					vxcp->vxc_bntmp2,
 					vxcp->vxc_bnctx);
 			vcpp->base.vc_pattern_generation++;
 		}
