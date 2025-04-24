@@ -23,6 +23,7 @@
 
 #include <pthread.h>
 
+#define OPENSSL_SUPPRESS_DEPRECATED
 #include <openssl/sha.h>
 #include <openssl/ripemd.h>
 #include <openssl/bn.h>
@@ -36,8 +37,6 @@
 #include "pattern.h"
 #include "util.h"
 #include "avl.h"
-
-#define OPENSSL_SUPPRESS_DEPRECATED
 
 /*
  * Common code for execution helper
@@ -688,6 +687,7 @@ get_prefix_ranges(int addrtype, const char *pfx, BIGNUM **result,
 	BIGNUM *bntmp = BN_new();
 	BIGNUM *bntmp2 = BN_new();
 	BIGNUM *bnhigh = NULL, *bnlow = NULL, *bnhigh2 = NULL, *bnlow2 = NULL;
+	BIGNUM *bntp = NULL, *bnap = NULL, *bnbp = NULL;
 
 	if (!bntarg || !bnceil || !bnfloor || !bnbase || !bntmp || !bntmp2) {
 		goto out;
@@ -745,15 +745,14 @@ get_prefix_ranges(int addrtype, const char *pfx, BIGNUM **result,
 		 */
 
 		BN_copy(bntmp, bnceil);
-		bntp = bnap;
+		bntp = bntmp;
 		bnbp = bntmp2;
 		b58pow = 0;
-		while (BN_cmp(bnap, bnbase) > 0) {
+		while (BN_cmp(bntp, bnbase) > 0) {
 			b58pow++;
-			BN_div(bnbp, NULL, bnap, bnbase, bnctx);
-			bntp = bnap;
-			bnap = bnbp;
-			bnbp = bntp;
+			BN_div(bnbp, NULL, bntp, bnbase, bnctx);
+			bntp = bntmp;
+			bnap = bntmp2;
 		}
 		b58ceil = BN_get_word(bnap);
 
