@@ -1156,10 +1156,10 @@ prefix_case_iter_next(prefix_case_iter_t *cip)
 
 
 typedef struct _vg_prefix_context_s {
-	vg_context_t		base;
-	avl_root_t		vcp_avlroot;
-	BIGNUM			vcp_difficulty;
-	int			vcp_caseinsensitive;
+	vg_context_t           base;
+	avl_root_t            vcp_avlroot;
+	BIGNUM               *vcp_difficulty;
+	int                  vcp_caseinsensitive;
 } vg_prefix_context_t;
 
 void
@@ -1186,7 +1186,7 @@ vg_prefix_context_clear_all_patterns(vg_context_t *vcp)
 	vcpp->base.vc_npatterns = 0;
 	vcpp->base.vc_npatterns_start = 0;
 	vcpp->base.vc_found = 0;
-	BN_clear(&vcpp->vcp_difficulty);
+	BN_clear(vcpp->vcp_difficulty);
 }
 
 static void
@@ -1194,7 +1194,7 @@ vg_prefix_context_free(vg_context_t *vcp)
 {
 	vg_prefix_context_t *vcpp = (vg_prefix_context_t *) vcp;
 	vg_prefix_context_clear_all_patterns(vcp);
-	BN_clear_free(&vcpp->vcp_difficulty);
+	BN_clear_free(vcpp->vcp_difficulty);
 	free(vcpp);
 }
 
@@ -1220,7 +1220,7 @@ vg_prefix_context_next_difficulty(vg_prefix_context_t *vcpp,
 				BN_copy(bnmin, bntmp);
 			vp = vg_prefix_next(vp);
 		}
-		BN_copy(&vcpp->vcp_difficulty, bnmin);
+		BN_copy(vcpp->vcp_difficulty, bnmin);
 	}
 }
 
@@ -1232,7 +1232,7 @@ vg_prefix_context_add_patterns(vg_context_t *vcp,
 	prefix_case_iter_t caseiter;
 	vg_prefix_t *vp, *vp2;
 	BN_CTX *bnctx;
-	BIGNUM bntmp, bntmp2, bntmp3;
+	BIGNUM *bntmp = NULL, *bntmp2 = NULL, *bntmp3 = NULL;
 	BIGNUM *ranges[4];
 	int ret = 0;
 	int i, impossible = 0;
@@ -1241,9 +1241,14 @@ vg_prefix_context_add_patterns(vg_context_t *vcp,
 	char *dbuf;
 
 	bnctx = BN_CTX_new();
-	BN_init(&bntmp);
-	BN_init(&bntmp2);
-	BN_init(&bntmp3);
+	bntmp = BN_new();
+	bntmp2 = BN_new();
+	bntmp3 = BN_new();
+
+	if (!bnctx || !bntmp || !bntmp2 || !bntmp3) {
+		ret = -1;
+		goto out;
+	}
 
 	npfx = 0;
 	for (i = 0; i < npatterns; i++) {
@@ -1321,16 +1326,16 @@ vg_prefix_context_add_patterns(vg_context_t *vcp,
 		npfx++;
 
 		/* Determine the probability of finding a match */
-		vg_prefix_range_sum(vp, &bntmp, &bntmp2);
-		BN_add(&bntmp2, &vcpp->vcp_difficulty, &bntmp);
-		BN_copy(&vcpp->vcp_difficulty, &bntmp2);
+		vg_prefix_range_sum(vp, bntmp, bntmp2);
+		BN_add(bntmp2, vcpp->vcp_difficulty, bntmp);
+		BN_copy(vcpp->vcp_difficulty, bntmp2);
 
 		if (vcp->vc_verbose > 1) {
-			BN_clear(&bntmp2);
-			BN_set_bit(&bntmp2, 192);
-			BN_div(&bntmp3, NULL, &bntmp2, &bntmp, bnctx);
+			BN_clear(bntmp2);
+			BN_set_bit(bntmp2, 192);
+			BN_div(bntmp3, NULL, bntmp2, bntmp, bnctx);
 
-			dbuf = BN_bn2dec(&bntmp3);
+			dbuf = BN_bn2dec(bntmp3);
 			fprintf(stderr,
 				"Prefix difficulty: %20s %s\n",
 				dbuf, patterns[i]);
@@ -1364,55 +1369,62 @@ vg_prefix_context_add_patterns(vg_context_t *vcp,
 	}
 
 	if (npfx)
-		vg_prefix_context_next_difficulty(vcpp, &bntmp, &bntmp2, bnctx);
+		vg_prefix_context_next_difficulty(vcpp, bntmp, bntmp2, bnctx);
 
 	ret = (npfx != 0);
 
-	BN_clear_free(&bntmp);
-	BN_clear_free(&bntmp2);
-	BN_clear_free(&bntmp3);
+	BN_clear_free(bntmp);
+	BN_clear_free(bntmp2);
+	BN_clear_free(bntmp3);
 	BN_CTX_free(bnctx);
+out:
 	return ret;
 }
 
-double
+static double
 vg_prefix_get_difficulty(int addrtype, const char *pattern)
 {
 	BN_CTX *bnctx;
-	BIGNUM result, bntmp;
+	BIGNUM *result = NULL, *bntmp = NULL;
 	BIGNUM *ranges[4];
 	char *dbuf;
 	int ret;
 	double diffret = 0.0;
 
 	bnctx = BN_CTX_new();
-	BN_init(&result);
-	BN_init(&bntmp);
+	result = BN_new();
+	bntmp = BN_new();
+
+	if (!bnctx || !result || !bntmp) {
+		ret = -1;
+		goto out;
+	}
 
 	ret = get_prefix_ranges(addrtype,
 				pattern, ranges, bnctx);
 
 	if (ret == 0) {
-		BN_sub(&bntmp, ranges[1], ranges[0]);
-		BN_add(&result, &result, &bntmp);
+		BN_sub(bntmp, ranges[1], ranges[0]);
+		BN_add(result, result, bntmp);
 		if (ranges[2]) {
-			BN_sub(&bntmp, ranges[3], ranges[2]);
-			BN_add(&result, &result, &bntmp);
+			BN_sub(bntmp, ranges[3], ranges[2]);
+			BN_add(result, result, bntmp);
 		}
 		free_ranges(ranges);
 
-		BN_clear(&bntmp);
-		BN_set_bit(&bntmp, 192);
-		BN_div(&result, NULL, &bntmp, &result, bnctx);
+		BN_clear(bntmp);
+		BN_set_bit(bntmp, 192);
+		BN_div(result, NULL, bntmp, result, bnctx);
 
-		dbuf = BN_bn2dec(&result);
+		dbuf = BN_bn2dec(result);
 		diffret = strtod(dbuf, NULL);
 		OPENSSL_free(dbuf);
 	}
 
-	BN_clear_free(&result);
-	BN_clear_free(&bntmp);
+	BN_clear_free(result);
+	BN_clear_free(bntmp);
 	BN_CTX_free(bnctx);
+out:
 	return diffret;
 }
 
@@ -1454,9 +1466,9 @@ research:
 					    vxcp->vxc_bntarg,
 					    vxcp->vxc_bntmp);
 			BN_sub(vxcp->vxc_bntmp,
-				   &vcpp->vcp_difficulty,
+				   vcpp->vcp_difficulty,
 				   vxcp->vxc_bntarg);
-			BN_copy(&vcpp->vcp_difficulty, vxcp->vxc_bntmp);
+			BN_copy(vcpp->vcp_difficulty, vxcp->vxc_bntmp);
 
 			vg_prefix_delete(&vcpp->vcp_avlroot,vp);
 			vcpp->base.vc_npatterns--;
@@ -1545,7 +1557,7 @@ vg_prefix_context_new(int addrtype, int privtype, int caseinsensitive)
 		vcpp->base.vc_test = vg_prefix_test;
 		vcpp->base.vc_hash160_sort = vg_prefix_hash160_sort;
 		avl_root_init(&vcpp->vcp_avlroot);
-		BN_init(&vcpp->vcp_difficulty);
+		vcpp->vcp_difficulty = BN_new();
 		vcpp->vcp_caseinsensitive = caseinsensitive;
 	}
 	return &vcpp->base;
@@ -1671,21 +1683,25 @@ vg_regex_test(vg_exec_context_t *vxcp)
 	unsigned char hash1[32], hash2[32];
 	int i, zpfx, p, d, nres, re_vec[9];
 	char b58[40];
-	BIGNUM bnrem;
-	BIGNUM *bn, *bndiv, *bnptmp;
+	BIGNUM *bnrem = NULL;
+	BIGNUM *bn = NULL, *bndiv = NULL, *bnptmp = NULL;
 	int res = 0;
 
 	pcre *re;
 
-	BN_init(&bnrem);
+	bnrem = BN_new();
+	if (!bnrem) {
+		res = -1;
+		goto out;
+	}
 
 	/* Hash the hash and write the four byte check code */
 	SHA256(vxcp->vxc_binres, 21, hash1);
 	SHA256(hash1, sizeof(hash1), hash2);
 	memcpy(&vxcp->vxc_binres[21], hash2, 4);
 
-	bn = &vxcp->vxc_bntmp;
-	bndiv = &vxcp->vxc_bntmp2;
+	bn = vxcp->vxc_bntmp;
+	bndiv = vxcp->vxc_bntmp2;
 
 	BN_bin2bn(vxcp->vxc_binres, 25, bn);
 
@@ -1694,11 +1710,11 @@ vg_regex_test(vg_exec_context_t *vxcp)
 	p = sizeof(b58) - 1;
 	b58[p] = '\0';
 	while (!BN_is_zero(bn)) {
-		BN_div(bndiv, &bnrem, bn, &vxcp->vxc_bnbase, vxcp->vxc_bnctx);
+		BN_div(bndiv, bnrem, bn, vxcp->vxc_bnbase, vxcp->vxc_bnctx);
 		bnptmp = bn;
 		bn = bndiv;
 		bndiv = bnptmp;
-		d = BN_get_word(&bnrem);
+		d = BN_get_word(bnrem);
 		b58[--p] = vg_b58_alphabet[d];
 	}
 	while (zpfx--) {
@@ -1768,7 +1784,7 @@ restart_loop:
 		res = 1;
 	}
 out:
-	BN_clear_free(&bnrem);
+	BN_clear_free(bnrem);
 	return res;
 }
 
