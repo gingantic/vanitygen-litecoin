@@ -504,6 +504,7 @@ vg_protect_crypt(int parameter_group,
 	int opos, olen, oincr, nbytes;
 	int ipos;
 	int ret = 0;
+	int key_len, iv_len, block_size;
 
 	ctx = EVP_CIPHER_CTX_new();
 	if (!ctx)
@@ -530,20 +531,24 @@ vg_protect_crypt(int parameter_group,
 	pbkdf_digest = params->pbkdf_hash_getter();
 	cipher = params->cipher_getter();
 
+	key_len = EVP_CIPHER_get_key_length(cipher);
+	iv_len = EVP_CIPHER_get_iv_length(cipher);
+	block_size = EVP_CIPHER_get_block_size(cipher);
+
 	if (params->mode == 0) {
 		/* Brief encoding */
 		salt_len = 4;
 		hmac_len = 8;
 		hmac_keylen = 16;
-		ciphertext_len = ((plaintext_len + cipher->block_size - 1) /
-				  cipher->block_size) * cipher->block_size;
+		ciphertext_len = ((plaintext_len + block_size - 1) /
+				  block_size) * block_size;
 		pkcs7_padding = 0;
 		hmac_digest = EVP_sha256();
 	} else {
 		/* PKCS-compliant encoding */
 		salt_len = 8;
-		ciphertext_len = ((plaintext_len + cipher->block_size) /
-				  cipher->block_size) * cipher->block_size;
+		ciphertext_len = ((plaintext_len + block_size) /
+				  block_size) * block_size;
 		hmac_digest = NULL;
 	}
 
@@ -569,12 +574,12 @@ vg_protect_crypt(int parameter_group,
 			  salt, salt_len,
 			  params->iterations,
 			  pbkdf_digest,
-			  cipher->key_len + cipher->iv_len + hmac_keylen,
+			  key_len + iv_len + hmac_keylen,
 			  keymaterial);
 
 	if (!EVP_CipherInit(ctx, cipher,
 			    keymaterial,
-			    keymaterial + cipher->key_len,
+			    keymaterial + key_len,
 			    enc)) {
 		fprintf(stderr, "ERROR: could not configure cipher\n");
 		goto out;
@@ -610,7 +615,7 @@ vg_protect_crypt(int parameter_group,
 	if (hmac_len) {
 		hlen = sizeof(hmac);
 		HMAC(hmac_digest,
-		     keymaterial + cipher->key_len + cipher->iv_len,
+		     keymaterial + key_len + iv_len,
 		     hmac_keylen,
 		     enc ? data_in : data_out, plaintext_len,
 		     hmac, &hlen);
