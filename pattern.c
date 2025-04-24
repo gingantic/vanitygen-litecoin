@@ -723,17 +723,17 @@ get_prefix_ranges(int addrtype, const char *pfx, BIGNUM **result,
 			BN_set_word(bntarg, c);
 
 		} else {
-			BN_set_word(&bntmp2, c);
-			BN_mul(&bntmp, &bntarg, &bnbase, bnctx);
-			BN_add(&bntarg, &bntmp, &bntmp2);
+			BN_set_word(bntmp2, c);
+			BN_mul(bntmp, bntarg, bnbase, bnctx);
+			BN_add(bntarg, bntmp, bntmp2);
 		}
 	}
 
 	/* Power-of-two ceiling and floor values based on leading 1s */
-	BN_clear(&bntmp);
-	BN_set_bit(&bntmp, 200 - (zero_prefix * 8));
-	BN_sub(&bnceil, &bntmp, BN_value_one());
-	BN_set_bit(&bnfloor, 192 - (zero_prefix * 8));
+	BN_clear(bntmp);
+	BN_set_bit(bntmp, 200 - (zero_prefix * 8));
+	BN_sub(bnceil, bntmp, BN_value_one());
+	BN_set_bit(bnfloor, 192 - (zero_prefix * 8));
 
 	bnlow = BN_new();
 	bnhigh = BN_new();
@@ -744,13 +744,13 @@ get_prefix_ranges(int addrtype, const char *pfx, BIGNUM **result,
 		 * numeric boundaries of the prefix.
 		 */
 
-		BN_copy(&bntmp, &bnceil);
+		BN_copy(bntmp, bnceil);
 		bntp = bnap;
-		bnbp = &bntmp2;
+		bnbp = bntmp2;
 		b58pow = 0;
-		while (BN_cmp(bnap, &bnbase) > 0) {
+		while (BN_cmp(bnap, bnbase) > 0) {
 			b58pow++;
-			BN_div(bnbp, NULL, bnap, &bnbase, bnctx);
+			BN_div(bnbp, NULL, bnap, bnbase, bnctx);
 			bntp = bnap;
 			bnap = bnbp;
 			bnbp = bntp;
@@ -766,11 +766,11 @@ get_prefix_ranges(int addrtype, const char *pfx, BIGNUM **result,
 			goto out;
 		}
 
-		BN_set_word(&bntmp2, b58pow - (p - zero_prefix));
-		BN_exp(&bntmp, &bnbase, &bntmp2, bnctx);
-		BN_mul(bnlow, &bntmp, &bntarg, bnctx);
-		BN_sub(&bntmp2, &bntmp, BN_value_one());
-		BN_add(bnhigh, bnlow, &bntmp2);
+		BN_set_word(bntmp2, b58pow - (p - zero_prefix));
+		BN_exp(bntmp, bnbase, bntmp2, bnctx);
+		BN_mul(bnlow, bntmp, bntarg, bnctx);
+		BN_sub(bntmp2, bntmp, BN_value_one());
+		BN_add(bnhigh, bnlow, bntmp2);
 
 		if (b58top <= b58ceil) {
 			/* Fill out the upper range too */
@@ -778,16 +778,16 @@ get_prefix_ranges(int addrtype, const char *pfx, BIGNUM **result,
 			bnlow2 = BN_new();
 			bnhigh2 = BN_new();
 
-			BN_mul(bnlow2, bnlow, &bnbase, bnctx);
-			BN_mul(&bntmp2, bnhigh, &bnbase, bnctx);
-			BN_set_word(&bntmp, 57);
-			BN_add(bnhigh2, &bntmp2, &bntmp);
+			BN_mul(bnlow2, bnlow, bnbase, bnctx);
+			BN_mul(bntmp2, bnhigh, bnbase, bnctx);
+			BN_set_word(bntmp, 57);
+			BN_add(bnhigh2, bntmp2, bntmp);
 
 			/*
 			 * Addresses above the ceiling will have one
 			 * fewer "1" prefix in front than we require.
 			 */
-			if (BN_cmp(&bnceil, bnlow2) < 0) {
+			if (BN_cmp(bnceil, bnlow2) < 0) {
 				/* High prefix is above the ceiling */
 				check_upper = 0;
 				BN_free(bnhigh2);
@@ -795,15 +795,15 @@ get_prefix_ranges(int addrtype, const char *pfx, BIGNUM **result,
 				BN_free(bnlow2);
 				bnlow2 = NULL;
 			}
-			else if (BN_cmp(&bnceil, bnhigh2) < 0)
+			else if (BN_cmp(bnceil, bnhigh2) < 0)
 				/* High prefix is partly above the ceiling */
-				BN_copy(bnhigh2, &bnceil);
+				BN_copy(bnhigh2, bnceil);
 
 			/*
 			 * Addresses below the floor will have another
 			 * "1" prefix in front instead of our target.
 			 */
-			if (BN_cmp(&bnfloor, bnhigh) >= 0) {
+			if (BN_cmp(bnfloor, bnhigh) >= 0) {
 				/* Low prefix is completely below the floor */
 				assert(check_upper);
 				check_upper = 0;
@@ -814,35 +814,35 @@ get_prefix_ranges(int addrtype, const char *pfx, BIGNUM **result,
 				bnlow = bnlow2;
 				bnlow2 = NULL;
 			}			
-			else if (BN_cmp(&bnfloor, bnlow) > 0) {
+			else if (BN_cmp(bnfloor, bnlow) > 0) {
 				/* Low prefix is partly below the floor */
-				BN_copy(bnlow, &bnfloor);
+				BN_copy(bnlow, bnfloor);
 			}
 		}
 
 	} else {
-		BN_copy(bnhigh, &bnceil);
+		BN_copy(bnhigh, bnceil);
 		BN_clear(bnlow);
 	}
 
 	/* Limit the prefix to the address type */
-	BN_clear(&bntmp);
-	BN_set_word(&bntmp, addrtype);
-	BN_lshift(&bntmp2, &bntmp, 192);
+	BN_clear(bntmp);
+	BN_set_word(bntmp, addrtype);
+	BN_lshift(bntmp2, bntmp, 192);
 
 	if (check_upper) {
-		if (BN_cmp(&bntmp2, bnhigh2) > 0) {
+		if (BN_cmp(bntmp2, bnhigh2) > 0) {
 			check_upper = 0;
 			BN_free(bnhigh2);
 			bnhigh2 = NULL;
 			BN_free(bnlow2);
 			bnlow2 = NULL;
 		}
-		else if (BN_cmp(&bntmp2, bnlow2) > 0)
-			BN_copy(bnlow2, &bntmp2);
+		else if (BN_cmp(bntmp2, bnlow2) > 0)
+			BN_copy(bnlow2, bntmp2);
 	}
 
-	if (BN_cmp(&bntmp2, bnhigh) > 0) {
+	if (BN_cmp(bntmp2, bnhigh) > 0) {
 		if (!check_upper)
 			goto not_possible;
 		check_upper = 0;
@@ -853,8 +853,8 @@ get_prefix_ranges(int addrtype, const char *pfx, BIGNUM **result,
 		bnlow = bnlow2;
 		bnlow2 = NULL;
 	}
-	else if (BN_cmp(&bntmp2, bnlow) > 0) {
-		BN_copy(bnlow, &bntmp2);
+	else if (BN_cmp(bntmp2, bnlow) > 0) {
+		BN_copy(bnlow, bntmp2);
 	}
 
 	/* Address ranges are complete */
