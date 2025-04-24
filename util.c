@@ -95,196 +95,186 @@ dumpbn(const BIGNUM *bn)
  * Key format encode/decode
  */
 
-void
-vg_b58_encode_check(void *buf, size_t len, char *result)
+int
+vg_b58_encode_check(const unsigned char *data, int datalen,
+                   unsigned char *buf, int buflen)
 {
-	unsigned char hash1[32];
-	unsigned char hash2[32];
+        BIGNUM *bna = NULL, *bnb = NULL, *bnbase = NULL, *bnrem = NULL;
+        BN_CTX *bnctx;
+        int i, j, k;
+        int ret = -1;
 
-	int d, p;
+        bnctx = BN_CTX_new();
+        bna = BN_new();
+        bnb = BN_new();
+        bnbase = BN_new();
+        bnrem = BN_new();
 
-	BN_CTX *bnctx;
-	BIGNUM *bn, *bndiv, *bntmp;
-	BIGNUM bna, bnb, bnbase, bnrem;
-	unsigned char *binres;
-	int brlen, zpfx;
+        if (!bnctx || !bna || !bnb || !bnbase || !bnrem) {
+                goto out;
+        }
 
-	bnctx = BN_CTX_new();
-	BN_init(&bna);
-	BN_init(&bnb);
-	BN_init(&bnbase);
-	BN_init(&bnrem);
-	BN_set_word(&bnbase, 58);
+        BN_set_word(bnbase, 58);
+        BN_bin2bn(data, datalen, bna);
 
-	bn = &bna;
-	bndiv = &bnb;
+        for (i = 0; i < datalen && data[i] == 0; i++)
+                buf[i] = vg_b58_alphabet[0];
 
-	brlen = (2 * len) + 4;
-	binres = (unsigned char*) malloc(brlen);
-	memcpy(binres, buf, len);
+        j = i;
+        while (!BN_is_zero(bna)) {
+                BN_div(bnb, bnrem, bna, bnbase, bnctx);
+                k = BN_get_word(bnrem);
+                if (j >= buflen) {
+                        ret = -1;
+                        goto out;
+                }
+                buf[j++] = vg_b58_alphabet[k];
+                BN_copy(bna, bnb);
+        }
 
-	SHA256(binres, len, hash1);
-	SHA256(hash1, sizeof(hash1), hash2);
-	memcpy(&binres[len], hash2, 4);
+        for (k = i; k < j; k++) {
+                if (j >= buflen) {
+                        ret = -1;
+                        goto out;
+                }
+                buf[k] = vg_b58_alphabet[0];
+        }
 
-	BN_bin2bn(binres, len + 4, bn);
+        for (k = i; k < (j + i) / 2; k++) {
+                unsigned char tmp = buf[k];
+                buf[k] = buf[j + i - k - 1];
+                buf[j + i - k - 1] = tmp;
+        }
 
-	for (zpfx = 0; zpfx < (len + 4) && binres[zpfx] == 0; zpfx++);
-
-	p = brlen;
-	while (!BN_is_zero(bn)) {
-		BN_div(bndiv, &bnrem, bn, &bnbase, bnctx);
-		bntmp = bn;
-		bn = bndiv;
-		bndiv = bntmp;
-		d = BN_get_word(&bnrem);
-		binres[--p] = vg_b58_alphabet[d];
-	}
-
-	while (zpfx--) {
-		binres[--p] = vg_b58_alphabet[0];
-	}
-
-	memcpy(result, &binres[p], brlen - p);
-	result[brlen - p] = '\0';
-
-	free(binres);
-	BN_clear_free(&bna);
-	BN_clear_free(&bnb);
-	BN_clear_free(&bnbase);
-	BN_clear_free(&bnrem);
-	BN_CTX_free(bnctx);
+        ret = j;
+out:
+        if (bnrem) BN_free(bnrem);
+        if (bnbase) BN_free(bnbase);
+        if (bnb) BN_free(bnb);
+        if (bna) BN_free(bna);
+        if (bnctx) BN_CTX_free(bnctx);
+        return ret;
 }
 
 #define skip_char(c) \
 	(((c) == '\r') || ((c) == '\n') || ((c) == ' ') || ((c) == '\t'))
 
 int
-vg_b58_decode_check(const char *input, void *buf, size_t len)
+vg_b58_decode_check(const unsigned char *str, int strlen,
+                   unsigned char *buf, int buflen)
 {
-	int i, l, c;
-	unsigned char *xbuf = NULL;
-	BIGNUM bn, bnw, bnbase;
-	BN_CTX *bnctx;
-	unsigned char hash1[32], hash2[32];
-	int zpfx;
-	int res = 0;
+        BIGNUM *bn = NULL, *bnw = NULL, *bnbase = NULL;
+        BN_CTX *bnctx;
+        int i, j, k;
+        int ret = -1;
 
-	BN_init(&bn);
-	BN_init(&bnw);
-	BN_init(&bnbase);
-	BN_set_word(&bnbase, 58);
-	bnctx = BN_CTX_new();
+        bnctx = BN_CTX_new();
+        bn = BN_new();
+        bnw = BN_new();
+        bnbase = BN_new();
 
-	/* Build a bignum from the encoded value */
-	l = strlen(input);
-	for (i = 0; i < l; i++) {
-		if (skip_char(input[i]))
-			continue;
-		c = vg_b58_reverse_map[(int)input[i]];
-		if (c < 0)
-			goto out;
-		BN_clear(&bnw);
-		BN_set_word(&bnw, c);
-		BN_mul(&bn, &bn, &bnbase, bnctx);
-		BN_add(&bn, &bn, &bnw);
-	}
+        if (!bnctx || !bn || !bnw || !bnbase) {
+                goto out;
+        }
 
-	/* Copy the bignum to a byte buffer */
-	for (i = 0, zpfx = 0; input[i]; i++) {
-		if (skip_char(input[i]))
-			continue;
-		if (input[i] != vg_b58_alphabet[0])
-			break;
-		zpfx++;
-	}
-	c = BN_num_bytes(&bn);
-	l = zpfx + c;
-	if (l < 5)
-		goto out;
-	xbuf = (unsigned char *) malloc(l);
-	if (!xbuf)
-		goto out;
-	if (zpfx)
-		memset(xbuf, 0, zpfx);
-	if (c)
-		BN_bn2bin(&bn, xbuf + zpfx);
+        BN_set_word(bnbase, 58);
+        BN_set_word(bn, 0);
 
-	/* Check the hash code */
-	l -= 4;
-	SHA256(xbuf, l, hash1);
-	SHA256(hash1, sizeof(hash1), hash2);
-	if (memcmp(hash2, xbuf + l, 4))
-		goto out;
+        for (i = 0; i < strlen; i++) {
+                const char *pch = strchr(vg_b58_alphabet, str[i]);
+                if (!pch) {
+                        ret = -1;
+                        goto out;
+                }
+                BN_mul(bnw, bn, bnbase, bnctx);
+                BN_set_word(bn, pch - vg_b58_alphabet);
+                BN_add(bn, bn, bnw);
+        }
 
-	/* Buffer verified */
-	if (len) {
-		if (len > l)
-			len = l;
-		memcpy(buf, xbuf, len);
-	}
-	res = l;
+        for (i = 0; i < strlen && str[i] == vg_b58_alphabet[0]; i++)
+                buf[i] = 0;
 
+        j = i;
+        while (!BN_is_zero(bn)) {
+                BN_div(bnw, NULL, bn, bnbase, bnctx);
+                k = BN_get_word(bnw);
+                if (j >= buflen) {
+                        ret = -1;
+                        goto out;
+                }
+                buf[j++] = k;
+                BN_copy(bn, bnw);
+        }
+
+        for (k = i; k < j; k++) {
+                if (j >= buflen) {
+                        ret = -1;
+                        goto out;
+                }
+                buf[k] = 0;
+        }
+
+        for (k = i; k < (j + i) / 2; k++) {
+                unsigned char tmp = buf[k];
+                buf[k] = buf[j + i - k - 1];
+                buf[j + i - k - 1] = tmp;
+        }
+
+        ret = j;
 out:
-	if (xbuf)
-		free(xbuf);
-	BN_clear_free(&bn);
-	BN_clear_free(&bnw);
-	BN_clear_free(&bnbase);
-	BN_CTX_free(bnctx);
-	return res;
+        if (bnbase) BN_free(bnbase);
+        if (bnw) BN_free(bnw);
+        if (bn) BN_free(bn);
+        if (bnctx) BN_CTX_free(bnctx);
+        return ret;
 }
 
 void
-vg_encode_address(const EC_POINT *ppoint, const EC_GROUP *pgroup,
-		  int addrtype, char *result)
+vg_encode_address(const EC_POINT *ppnt, const EC_GROUP *pgroup,
+                 int addrtype, char *result)
 {
-	unsigned char eckey_buf[128], *pend;
-	unsigned char binres[21] = {0,};
-	unsigned char hash1[32];
+        unsigned char hash1[32], hash2[20];
+        unsigned char binres[21];
+        int len;
 
-	pend = eckey_buf;
+        binres[0] = addrtype;
+        len = EC_POINT_point2oct(pgroup, ppnt,
+                                POINT_CONVERSION_UNCOMPRESSED,
+                                &binres[1], 65, NULL);
+        assert(len == 65);
 
-	EC_POINT_point2oct(pgroup,
-			   ppoint,
-			   POINT_CONVERSION_UNCOMPRESSED,
-			   eckey_buf,
-			   sizeof(eckey_buf),
-			   NULL);
-	pend = eckey_buf + 0x41;
-	binres[0] = addrtype;
-	SHA256(eckey_buf, pend - eckey_buf, hash1);
-	RIPEMD160(hash1, sizeof(hash1), &binres[1]);
+        SHA256(&binres[1], 65, hash1);
+        EVP_MD_CTX *mdctx = EVP_MD_CTX_new();
+        EVP_DigestInit_ex(mdctx, EVP_ripemd160(), NULL);
+        EVP_DigestUpdate(mdctx, hash1, sizeof(hash1));
+        EVP_DigestFinal_ex(mdctx, &binres[1], NULL);
+        EVP_MD_CTX_free(mdctx);
 
-	vg_b58_encode_check(binres, sizeof(binres), result);
+        vg_b58_encode_check(binres, 21, (unsigned char *)result, 36);
 }
 
 void
-vg_encode_script_address(const EC_POINT *ppoint, const EC_GROUP *pgroup,
-			 int addrtype, char *result)
+vg_encode_script_address(const EC_POINT *ppnt, const EC_GROUP *pgroup,
+                        int addrtype, char *result)
 {
-	unsigned char script_buf[69];
-	unsigned char *eckey_buf = script_buf + 2;
-	unsigned char binres[21] = {0,};
-	unsigned char hash1[32];
+        unsigned char hash1[32], hash2[20];
+        unsigned char binres[21];
+        int len;
 
-	script_buf[ 0] = 0x51;  // OP_1
-	script_buf[ 1] = 0x41;  // pubkey length
-	// gap for pubkey
-	script_buf[67] = 0x51;  // OP_1
-	script_buf[68] = 0xae;  // OP_CHECKMULTISIG
+        binres[0] = addrtype;
+        len = EC_POINT_point2oct(pgroup, ppnt,
+                                POINT_CONVERSION_UNCOMPRESSED,
+                                &binres[1], 65, NULL);
+        assert(len == 65);
 
-	EC_POINT_point2oct(pgroup,
-			   ppoint,
-			   POINT_CONVERSION_UNCOMPRESSED,
-			   eckey_buf,
-			   65,
-			   NULL);
-	binres[0] = addrtype;
-	SHA256(script_buf, 69, hash1);
-	RIPEMD160(hash1, sizeof(hash1), &binres[1]);
+        SHA256(&binres[1], 65, hash1);
+        EVP_MD_CTX *mdctx = EVP_MD_CTX_new();
+        EVP_DigestInit_ex(mdctx, EVP_ripemd160(), NULL);
+        EVP_DigestUpdate(mdctx, hash1, sizeof(hash1));
+        EVP_DigestFinal_ex(mdctx, &binres[1], NULL);
+        EVP_MD_CTX_free(mdctx);
 
-	vg_b58_encode_check(binres, sizeof(binres), result);
+        vg_b58_encode_check(binres, 21, (unsigned char *)result, 36);
 }
 
 void
@@ -309,26 +299,23 @@ vg_encode_privkey(const EC_KEY *pkey, int addrtype, char *result)
 int
 vg_set_privkey(const BIGNUM *bnpriv, EC_KEY *pkey)
 {
-	const EC_GROUP *pgroup;
-	EC_POINT *ppnt;
-	int res;
+        const EC_GROUP *pgroup;
+        EC_POINT *ppnt;
+        int ret = 0;
 
-	pgroup = EC_KEY_get0_group(pkey);
-	ppnt = EC_POINT_new(pgroup);
+        pgroup = EC_KEY_get0_group(pkey);
+        ppnt = EC_POINT_new(pgroup);
+        if (!ppnt)
+                return 0;
 
-	res = (ppnt &&
-	       EC_KEY_set_private_key(pkey, bnpriv) &&
-	       EC_POINT_mul(pgroup, ppnt, bnpriv, NULL, NULL, NULL) &&
-	       EC_KEY_set_public_key(pkey, ppnt));
+        if (EC_POINT_mul(pgroup, ppnt, bnpriv, NULL, NULL, NULL) &&
+            EC_KEY_set_private_key(pkey, bnpriv) &&
+            EC_KEY_set_public_key(pkey, ppnt)) {
+                ret = 1;
+        }
 
-	if (ppnt)
-		EC_POINT_free(ppnt);
-
-	if (!res)
-		return 0;
-
-	assert(EC_KEY_check_key(pkey));
-	return 1;
+        EC_POINT_free(ppnt);
+        return ret;
 }
 
 int
@@ -338,7 +325,7 @@ vg_decode_privkey(const char *b58encoded, EC_KEY *pkey, int *addrtype)
 	unsigned char ecpriv[48];
 	int res;
 
-	res = vg_b58_decode_check(b58encoded, ecpriv, sizeof(ecpriv));
+	res = vg_b58_decode_check(b58encoded, strlen(b58encoded), ecpriv, sizeof(ecpriv));
 	if (res != 33)
 		return 0;
 
@@ -702,7 +689,7 @@ vg_protect_decode_privkey(EC_KEY *pkey, int *keytype,
 	int restype;
 	int res;
 
-	res = vg_b58_decode_check(encoded, ecenc, sizeof(ecenc));
+	res = vg_b58_decode_check(encoded, strlen(encoded), ecenc, sizeof(ecenc));
 
 	if ((res < 2) || (res > sizeof(ecenc)))
 		return 0;
