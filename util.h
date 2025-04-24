@@ -33,18 +33,20 @@ extern void fdumpbn(FILE *fp, const BIGNUM *bn);
 extern void dumphex(const unsigned char *src, size_t len);
 extern void dumpbn(const BIGNUM *bn);
 
-extern void vg_b58_encode_check(void *buf, size_t len, char *result);
-extern int vg_b58_decode_check(const char *input, void *buf, size_t len);
+/* Base58 encoding/decoding */
+extern int vg_b58_encode_check(const unsigned char *data, int datalen,
+                             unsigned char *buf, int buflen);
+extern int vg_b58_decode_check(const unsigned char *str, int strlen,
+                             unsigned char *buf, int buflen);
 
-extern void vg_encode_address(const EC_POINT *ppoint, const EC_GROUP *pgroup,
-			      int addrtype, char *result);
-extern void vg_encode_script_address(const EC_POINT *ppoint,
-				     const EC_GROUP *pgroup,
-				     int addrtype, char *result);
+/* Address encoding/decoding */
+extern void vg_encode_address(const EC_POINT *ppnt, const EC_GROUP *pgroup,
+                            int addrtype, char *result);
+extern void vg_encode_script_address(const EC_POINT *ppnt, const EC_GROUP *pgroup,
+                                   int addrtype, char *result);
 extern void vg_encode_privkey(const EC_KEY *pkey, int addrtype, char *result);
 extern int vg_set_privkey(const BIGNUM *bnpriv, EC_KEY *pkey);
-extern int vg_decode_privkey(const char *b58encoded,
-			     EC_KEY *pkey, int *addrtype);
+extern int vg_decode_privkey(const char *b58encoded, EC_KEY *pkey, int *addrtype);
 
 enum {
 	VG_PROTKEY_DEFAULT = -1,
@@ -54,25 +56,28 @@ enum {
 
 #define VG_PROTKEY_MAX_B58 128
 
+/* Protected key encoding/decoding */
 extern int vg_protect_encode_privkey(char *out,
-				     const EC_KEY *pkey, int keytype,
-				     int parameter_group,
-				     const char *pass);
+                                   const EC_KEY *pkey, int keytype,
+                                   int parameter_group,
+                                   const char *pass);
 extern int vg_protect_decode_privkey(EC_KEY *pkey, int *keytype,
-				     const char *encoded, const char *pass);
+                                   const char *encoded, const char *pass);
 
+/* PKCS#8 encoding/decoding */
 extern int vg_pkcs8_encode_privkey(char *out, int outlen,
-				   const EC_KEY *pkey,
-				   const char *pass);
-extern int vg_pkcs8_decode_privkey(EC_KEY *pkey, const char *pem_in,
-				   const char *pass);
+                                 const EC_KEY *pkey, const char *pass);
+extern int vg_pkcs8_decode_privkey(EC_KEY *pkey,
+                                 const char *pem_in, const char *pass);
 
 extern int vg_decode_privkey_any(EC_KEY *pkey, int *addrtype,
 				 const char *input, const char *pass);
 
+/* Password handling */
 extern int vg_read_password(char *buf, size_t size);
 extern int vg_check_password_complexity(const char *pass, int verbose);
 
+/* File handling */
 extern int vg_read_file(FILE *fp, char ***result, int *rescount);
 
 #endif /* !defined (__VG_UTIL_H__) */

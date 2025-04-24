@@ -233,7 +233,7 @@ void
 vg_encode_address(const EC_POINT *ppnt, const EC_GROUP *pgroup,
                  int addrtype, char *result)
 {
-        unsigned char hash1[32], hash2[20];
+        unsigned char hash1[32];
         unsigned char binres[21];
         int len;
 
@@ -257,7 +257,7 @@ void
 vg_encode_script_address(const EC_POINT *ppnt, const EC_GROUP *pgroup,
                         int addrtype, char *result)
 {
-        unsigned char hash1[32], hash2[20];
+        unsigned char hash1[32];
         unsigned char binres[21];
         int len;
 
@@ -280,20 +280,20 @@ vg_encode_script_address(const EC_POINT *ppnt, const EC_GROUP *pgroup,
 void
 vg_encode_privkey(const EC_KEY *pkey, int addrtype, char *result)
 {
-	unsigned char eckey_buf[128];
-	const BIGNUM *bn;
-	int nbytes;
+        unsigned char eckey_buf[128];
+        const BIGNUM *bn;
+        int nbytes;
 
-	bn = EC_KEY_get0_private_key(pkey);
+        bn = EC_KEY_get0_private_key(pkey);
 
-	eckey_buf[0] = addrtype;
-	nbytes = BN_num_bytes(bn);
-	assert(nbytes <= 32);
-	if (nbytes < 32)
-		memset(eckey_buf + 1, 0, 32 - nbytes);
-	BN_bn2bin(bn, &eckey_buf[33 - nbytes]);
+        eckey_buf[0] = addrtype;
+        nbytes = BN_num_bytes(bn);
+        assert(nbytes <= 32);
+        if (nbytes < 32)
+                memset(eckey_buf + 1, 0, 32 - nbytes);
+        BN_bn2bin(bn, &eckey_buf[33 - nbytes]);
 
-	vg_b58_encode_check(eckey_buf, 33, result);
+        vg_b58_encode_check(eckey_buf, 33, (unsigned char *)result, 36);
 }
 
 int
@@ -321,20 +321,24 @@ vg_set_privkey(const BIGNUM *bnpriv, EC_KEY *pkey)
 int
 vg_decode_privkey(const char *b58encoded, EC_KEY *pkey, int *addrtype)
 {
-	BIGNUM bnpriv;
-	unsigned char ecpriv[48];
-	int res;
+        BIGNUM *bnpriv = NULL;
+        unsigned char ecpriv[48];
+        int res;
 
-	res = vg_b58_decode_check(b58encoded, strlen(b58encoded), ecpriv, sizeof(ecpriv));
-	if (res != 33)
-		return 0;
+        res = vg_b58_decode_check((const unsigned char *)b58encoded, 
+                                strlen(b58encoded), ecpriv, sizeof(ecpriv));
+        if (res != 33)
+                return 0;
 
-	BN_init(&bnpriv);
-	BN_bin2bn(ecpriv + 1, res - 1, &bnpriv);
-	res = vg_set_privkey(&bnpriv, pkey);
-	BN_clear_free(&bnpriv);
-	*addrtype = ecpriv[0];
-	return 1;
+        bnpriv = BN_new();
+        if (!bnpriv)
+                return 0;
+
+        BN_bin2bn(ecpriv + 1, res - 1, bnpriv);
+        res = vg_set_privkey(bnpriv, pkey);
+        BN_free(bnpriv);
+        *addrtype = ecpriv[0];
+        return res;
 }
 
 #if OPENSSL_VERSION_NUMBER < 0x10000000L
